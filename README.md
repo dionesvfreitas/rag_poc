@@ -32,6 +32,19 @@ e grava `parsed_sections.jsonl`. Também é possível configurar os caminhos:
 INPUT_PDF=documento.pdf OUTPUT_JSONL=chunks.jsonl .venv/bin/python parse_pdf.py
 ```
 
+Depois do parsing, gere a camada hierárquica para RAG:
+
+```bash
+.venv/bin/python rag_chunker.py
+```
+
+Por padrão, o chunker lê `parsed_sections.jsonl` e grava `rag_chunks.jsonl`.
+Também é possível configurar os caminhos:
+
+```bash
+RAG_INPUT_JSONL=parsed_sections.jsonl RAG_OUTPUT_JSONL=rag_chunks.jsonl .venv/bin/python rag_chunker.py
+```
+
 ## Configuração
 
 `cpu` é o default para manter a execução previsível no macOS.
@@ -72,6 +85,14 @@ DEBUG_ARTIFACTS_DIR=.artifacts/parser
 
 Quando habilitado, o parser salva blocos brutos, blocos removidos como candidatos
 a cabeçalho/rodapé e chunks finais.
+
+Configurações da camada hierárquica:
+
+```bash
+RAG_TARGET_CHUNK_CHARS=1200
+RAG_MAX_CHUNK_CHARS=1800
+RAG_INCLUDE_SECTION_CONTEXT=true
+```
 
 ## Saída
 
@@ -139,6 +160,81 @@ O chunking usa unidades semânticas: título, parágrafo, item numerado, lista e
 tabela. Chunks grandes são divididos respeitando `MAX_CHUNK_CHARS` e mantendo
 `parent_chunk_id` para recomposição por seção.
 
+## Chunking Hierárquico Para RAG
+
+`rag_chunker.py` consome a saída do parser sem alterar seu contrato. Ele cria uma
+representação em três níveis:
+
+- `parent`: seção ou agrupamento lógico amplo, como `1 DO OBJETO`.
+- `child`: cláusula, item ou subitem derivado do parser.
+- `fragment`: pedaço semântico de um `child` grande demais para embedding.
+
+Também pode gerar `section_context`, um chunk estrutural por seção, sem resumo
+por IA. Ele lista subseções, cláusulas e quantidade de tabelas para ajudar o
+retriever a entender a forma da seção.
+
+Campos principais da saída hierárquica:
+
+```json
+{
+  "chunk_type": "parent|section_context|child|fragment|table",
+  "chunk_id": "uuid",
+  "parent_chunk_id": "uuid|null",
+  "section_root_chunk_id": "uuid",
+  "sibling_chunk_ids": ["uuid"],
+  "previous_chunk_id": "uuid|null",
+  "next_chunk_id": "uuid|null",
+  "document_id": "documento.pdf",
+  "section_title": "string|null",
+  "subsection_title": "string|null",
+  "section_path": ["string"],
+  "clause_number": "string|null",
+  "clause_path": ["string"],
+  "content": "texto"
+}
+```
+
+Exemplo de entrada do parser:
+
+```json
+{
+  "document_id": "doc.pdf",
+  "chunk_id": "c1",
+  "section_title": "1 DO OBJETO",
+  "section_path": ["1 DO OBJETO"],
+  "clause_number": "1.1",
+  "page_content": "1.1 Seleção de pessoas físicas e jurídicas..."
+}
+```
+
+Exemplo de saída do chunker:
+
+```json
+{
+  "chunk_type": "child",
+  "parent_chunk_id": "uuid-da-secao",
+  "section_root_chunk_id": "uuid-da-secao",
+  "clause_number": "1.1",
+  "clause_path": ["1", "1.1"],
+  "sibling_chunk_ids": ["uuid-irmao"],
+  "previous_chunk_id": null,
+  "next_chunk_id": "uuid-proximo",
+  "content": "1.1 Seleção de pessoas físicas e jurídicas..."
+}
+```
+
+Fragments são criados apenas quando o `child` excede `RAG_MAX_CHUNK_CHARS`. A
+fragmentação respeita, nesta ordem, parágrafos, itens de lista, frases e, por
+fim, quebra em limite de palavra. Assim, o texto não é dividido cegamente por
+caracteres. Cada fragment preserva `section_path`, `clause_path`,
+`parent_chunk_id`, `source_child_chunk_id` e links de vizinhança.
+
+Essa estrutura prepara parent-child retrieval: o embedding pode ser calculado
+sobre `child`, `fragment`, `table` e `section_context`; após a recuperação, a
+aplicação consegue expandir contexto pelo `parent_chunk_id`, reconstruir a seção
+via `section_root_chunk_id`, navegar por irmãos com `sibling_chunk_ids` e montar
+janelas ordenadas com `previous_chunk_id` e `next_chunk_id`.
+
 ## Tabelas
 
 Tabelas são preservadas como chunks próprios quando `PRESERVE_TABLES_AS_CHUNKS`
@@ -162,6 +258,11 @@ contagem inconsistente de colunas, muitas células vazias, alta variação de
 tamanho entre células, linhas muito longas ou possível continuação de página. O
 parser não tenta reconstruir semanticamente tabelas.
 
+Na camada hierárquica, tabelas viram `chunk_type: "table"` e carregam
+`table_quality`, `markdown` e `table_structure`. Quando uma tabela excede
+`RAG_MAX_CHUNK_CHARS`, ela pode ser fragmentada por linhas, repetindo o cabeçalho
+Markdown em cada fragmento. Não há split de tabela por caracteres.
+
 ## Testes
 
 Os testes usam fixtures sintéticas e não dependem exclusivamente do PDF real:
@@ -172,7 +273,8 @@ Os testes usam fixtures sintéticas e não dependem exclusivamente do PDF real:
 
 Eles validam engine default, limpeza genérica, preservação de conteúdo único,
 separação entre seções e cláusulas, falsos positivos numéricos, normalização de
-whitespace, tabelas, split de chunks grandes e campos de página.
+whitespace, tabelas, split de chunks grandes, campos de página e a camada
+hierárquica de RAG.
 
 ## Limitações
 
