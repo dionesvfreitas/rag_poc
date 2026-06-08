@@ -1,9 +1,9 @@
 import json
+import hashlib
 import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from uuid import NAMESPACE_URL, uuid5
 
 
 INPUT_JSONL = os.getenv("RAG_INPUT_JSONL", "parsed_sections.jsonl")
@@ -49,7 +49,24 @@ def write_jsonl(records, output_path):
 
 
 def stable_chunk_id(document_id, chunk_type, basis):
-    return str(uuid5(NAMESPACE_URL, f"rag:{document_id}:{chunk_type}:{basis}"))
+    return hashlib.sha256(f"rag:{document_id}:{chunk_type}:{basis}".encode("utf-8")).hexdigest()
+
+
+def source_text(chunk):
+    return chunk.get("text") or chunk.get("page_content") or ""
+
+
+def source_markdown(chunk):
+    metadata = chunk.get("metadata") or {}
+    return chunk.get("markdown") or metadata.get("markdown")
+
+
+def source_ids(chunk):
+    ids = chunk.get("source_block_ids")
+    if ids:
+        return list(ids)
+    source_id = chunk.get("chunk_id")
+    return [source_id] if source_id else []
 
 
 def section_key(chunk):
@@ -175,7 +192,7 @@ def compose_parent_content(title, source_chunks):
     if title:
         parts.append(f"Seção: {title}")
     for chunk in source_chunks:
-        content = chunk.get("markdown") or chunk.get("page_content") or ""
+        content = source_markdown(chunk) or source_text(chunk)
         if content and content not in parts:
             parts.append(content)
     return "\n\n".join(parts)
@@ -185,7 +202,7 @@ def is_redundant_section_title(source, parent):
     return (
         source.get("content_type") == "title"
         and source.get("clause_number") is not None
-        and source.get("page_content") == parent.get("section_title")
+        and source_text(source) == parent.get("section_title")
     )
 
 
@@ -235,12 +252,13 @@ def make_section_context_chunk(parent, source_chunks):
 
 
 def make_child_chunk(parent, source):
-    content = source.get("page_content") or ""
+    content = source_text(source)
     chunk_id = stable_chunk_id(
         parent["document_id"], "child", source.get("chunk_id") or content[:160]
     )
     metadata = {
         "source_chunk_id": source.get("chunk_id"),
+        "source_block_ids": source_ids(source),
         "source_content_type": source.get("content_type"),
     }
     return {
@@ -304,7 +322,7 @@ def make_fragment_chunks(parent, child, source, config):
 
 
 def make_table_chunks(parent, source, config):
-    content = source.get("markdown") or source.get("page_content") or ""
+    content = source_markdown(source) or source_text(source)
     rows = split_markdown_table_rows(content, config.max_chunk_chars)
     total = len(rows)
     chunks = []
@@ -328,6 +346,7 @@ def make_table_chunks(parent, source, config):
             "previous_chunk_id": None,
             "next_chunk_id": None,
             "source_chunk_id": source.get("chunk_id"),
+            "source_block_ids": source_ids(source),
             "content": table_text,
             "markdown": table_text,
             "table_quality": metadata.get("table_quality"),
