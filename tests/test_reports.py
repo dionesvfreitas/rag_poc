@@ -34,6 +34,8 @@ def chunk(
     section_path=None,
     related_assets=None,
     metadata=None,
+    source_spans=None,
+    source_block_ids=None,
 ):
     return Chunk(
         chunk_id=f"c{chunk_no}",
@@ -44,6 +46,8 @@ def chunk(
         page_end=1,
         section_title=(section_path or [None])[-1],
         section_path=list(section_path or []),
+        source_block_ids=list(source_block_ids or []),
+        source_spans=list(source_spans or []),
         related_assets=list(related_assets or []),
         metadata=metadata or {},
     )
@@ -57,26 +61,106 @@ class ReportTests(unittest.TestCase):
             "asset_type": "image",
             "page_no": 1,
         }
+        linked_asset = {
+            **asset,
+            "link_strategy": "same_page_nearest_text",
+            "link_reason": "figure shares same page and section with nearest text block",
+            "link_score": 0.75,
+            "linked_by": "chunk_builder",
+            "link_evidence": {
+                "source_sequence_no": 1,
+                "target_sequence_no": 4,
+                "block_distance": 3,
+                "source_page_no": 1,
+                "target_page_no": 1,
+                "source_section_path": ["1 DO OBJETO"],
+                "target_section_path": ["1 DO OBJETO"],
+                "decision": "linked",
+                "reason": "same_page_nearest_text",
+            },
+            "metadata": {"source_block_id": "b1", "target_block_id": "b4"},
+        }
+        decorative_asset = {
+            "asset_id": "fig_002",
+            "asset_uri": "images/page_001_figure_002.png",
+            "asset_type": "image",
+            "page_no": 1,
+            "link_strategy": "not_linked_decorative",
+            "link_reason": "figure appears in front_matter and was marked decorative",
+            "link_score": None,
+            "linked_by": "chunk_builder",
+            "link_evidence": {
+                "source_sequence_no": 2,
+                "target_sequence_no": None,
+                "block_distance": None,
+                "source_page_no": 1,
+                "target_page_no": None,
+                "source_section_path": ["front_matter"],
+                "target_section_path": None,
+                "decision": "decorative",
+                "reason": "decorative_front_matter_logo",
+            },
+            "metadata": {"source_block_id": "b2"},
+        }
+        unlinked_asset = {
+            "asset_id": "fig_003",
+            "asset_uri": "images/page_002_figure_003.png",
+            "asset_type": "image",
+            "page_no": 2,
+            "link_strategy": "not_linked",
+            "link_reason": "figure could not be safely linked",
+            "link_score": None,
+            "linked_by": "chunk_builder",
+            "link_evidence": {
+                "source_sequence_no": 3,
+                "target_sequence_no": None,
+                "block_distance": None,
+                "source_page_no": 2,
+                "target_page_no": None,
+                "source_section_path": ["1 DO OBJETO"],
+                "target_section_path": None,
+                "decision": "not_linked",
+                "reason": "distance_too_large",
+            },
+            "metadata": {"source_block_id": "b3"},
+        }
         document = ParsedDocument(
             document_id="doc",
             source_path="doc.pdf",
             source_name="doc.pdf",
             page_total=2,
-            metadata={"assets": [asset]},
+            metadata={"assets": [asset, decorative_asset, unlinked_asset]},
             blocks=[
                 block(
                     "b1",
                     "",
                     content_type=ContentType.FIGURE.value,
                     section_path=["1 DO OBJETO"],
-                    metadata={"related_assets": [asset], "base64_removed": 1},
+                    metadata={"related_assets": [linked_asset], "base64_removed": 1},
                 ),
-                block("b2", "", content_type=ContentType.FIGURE.value),
-                block("b3", "Texto sem pagina.", page_no=None, metadata={"base64_removed": 1}),
+                block(
+                    "b2",
+                    "",
+                    content_type=ContentType.FIGURE.value,
+                    metadata={"related_assets": [decorative_asset]},
+                ),
+                block(
+                    "b3",
+                    "",
+                    content_type=ContentType.FIGURE.value,
+                    metadata={"related_assets": [unlinked_asset]},
+                ),
+                block("b4", "Texto sem pagina.", page_no=None, metadata={"base64_removed": 1}),
+                block(
+                    "b5",
+                    "Capa.",
+                    section_path=["front_matter"],
+                    metadata={"is_front_matter": True},
+                ),
             ],
         )
         chunks = [
-            chunk(1, "Texto vinculado.", section_path=["1 DO OBJETO"], related_assets=[asset]),
+            chunk(1, "Texto vinculado.", section_path=["1 DO OBJETO"], related_assets=[linked_asset]),
             chunk(
                 2,
                 "continua no meio.",
@@ -86,24 +170,185 @@ class ReportTests(unittest.TestCase):
                     "hard_split": True,
                 },
             ),
+            chunk(
+                3,
+                "Capa.",
+                section_path=["front_matter"],
+                metadata={"is_front_matter": True},
+            ),
         ]
 
         report = build_report(document, chunks, warnings=["adapter warning"])
 
-        self.assertEqual(report.figures_detected, 2)
-        self.assertEqual(report.figures_saved, 1)
+        self.assertEqual(report.figures_detected, 3)
+        self.assertEqual(report.figures_saved, 3)
         self.assertEqual(report.figures_linked_to_chunks, 1)
+        self.assertEqual(report.figures_unlinked, 1)
+        self.assertEqual(report.figures_marked_decorative, 1)
+        self.assertEqual(
+            report.figures_linked_to_chunks
+            + report.figures_unlinked
+            + report.figures_marked_decorative,
+            report.figures_detected,
+        )
         self.assertEqual(report.base64_removed, 2)
+        self.assertEqual(report.front_matter_blocks, 1)
+        self.assertEqual(report.front_matter_chunks, 1)
         self.assertEqual(report.chunks_without_section, 1)
         self.assertEqual(report.chunks_split, 1)
         self.assertEqual(report.chunks_mid_sentence, 1)
         self.assertEqual(report.chunks_hard_split, 1)
         self.assertEqual(report.blocks_without_page, 1)
-        self.assertEqual(report.blocks_without_section, 2)
+        self.assertEqual(report.blocks_without_section, 3)
         self.assertIn("adapter warning", report.warnings)
-        self.assertTrue(any("figure block(s) have no saved asset" in item for item in report.warnings))
+        self.assertTrue(any("could not be safely linked" in item for item in report.warnings))
+        self.assertTrue(any("marked decorative" in item for item in report.warnings))
         self.assertTrue(any("chunk(s) without section_path" in item for item in report.warnings))
         self.assertTrue(any("hard character split" in item for item in report.warnings))
+
+    def test_report_warns_about_chunk_without_source_spans(self):
+        document = ParsedDocument(
+            document_id="doc",
+            source_path="doc.pdf",
+            source_name="doc.pdf",
+            page_total=1,
+            blocks=[block("b1", "Texto auditavel.", section_path=["1 DO OBJETO"])],
+        )
+        chunks = [chunk(1, "Texto auditavel.", section_path=["1 DO OBJETO"])]
+
+        report = build_report(document, chunks)
+
+        self.assertEqual(report.source_spans_total, 0)
+        self.assertEqual(report.chunks_with_source_spans, 0)
+        self.assertEqual(report.chunks_without_source_spans, 1)
+        self.assertEqual(report.chunks_rebuildable_from_spans, 0)
+        self.assertEqual(report.chunks_not_rebuildable_from_spans, 0)
+        self.assertTrue(any("without source_spans" in item for item in report.warnings))
+
+    def test_report_warns_about_chunk_not_rebuildable_from_source_spans(self):
+        document = ParsedDocument(
+            document_id="doc",
+            source_path="doc.pdf",
+            source_name="doc.pdf",
+            page_total=1,
+            blocks=[block("b1", "Texto original.", section_path=["1 DO OBJETO"])],
+        )
+        chunks = [
+            chunk(
+                1,
+                "Texto alterado.",
+                section_path=["1 DO OBJETO"],
+                source_block_ids=["b1"],
+                source_spans=[
+                    {
+                        "block_id": "b1",
+                        "block_start_char": 0,
+                        "block_end_char": 15,
+                        "chunk_start_char": 0,
+                        "chunk_end_char": 15,
+                        "separator_before": None,
+                        "separator_after": None,
+                        "split_index": 0,
+                    }
+                ],
+            )
+        ]
+
+        report = build_report(document, chunks)
+
+        self.assertEqual(report.source_spans_total, 1)
+        self.assertEqual(report.chunks_with_source_spans, 1)
+        self.assertEqual(report.chunks_without_source_spans, 0)
+        self.assertEqual(report.chunks_rebuildable_from_spans, 0)
+        self.assertEqual(report.chunks_not_rebuildable_from_spans, 1)
+        self.assertTrue(any("not rebuildable from source_spans" in item for item in report.warnings))
+
+    def test_report_warns_about_asset_link_without_strategy_or_reason(self):
+        incomplete_asset = {
+            "asset_id": "fig_001",
+            "asset_uri": "images/page_001_figure_001.png",
+            "asset_type": "image",
+        }
+        document = ParsedDocument(
+            document_id="doc",
+            source_path="doc.pdf",
+            source_name="doc.pdf",
+            page_total=1,
+            blocks=[block("b1", "Texto.", section_path=["1 DO OBJETO"])],
+        )
+        chunks = [
+            chunk(
+                1,
+                "Texto.",
+                section_path=["1 DO OBJETO"],
+                related_assets=[incomplete_asset],
+                source_block_ids=["b1"],
+                source_spans=[
+                    {
+                        "block_id": "b1",
+                        "block_start_char": 0,
+                        "block_end_char": 6,
+                        "chunk_start_char": 0,
+                        "chunk_end_char": 6,
+                        "separator_before": None,
+                        "separator_after": None,
+                        "split_index": 0,
+                    }
+                ],
+            )
+        ]
+
+        report = build_report(document, chunks)
+
+        self.assertEqual(report.asset_links_without_strategy, 1)
+        self.assertEqual(report.asset_links_without_reason, 1)
+        self.assertTrue(any("without link_strategy" in item for item in report.warnings))
+        self.assertTrue(any("without link_reason" in item for item in report.warnings))
+
+    def test_report_counts_front_matter_without_section_errors(self):
+        document = ParsedDocument(
+            document_id="doc",
+            source_path="doc.pdf",
+            source_name="doc.pdf",
+            page_total=1,
+            blocks=[
+                block(
+                    "b1",
+                    "Capa.",
+                    section_path=["front_matter"],
+                    metadata={"is_front_matter": True},
+                )
+            ],
+        )
+        chunks = [
+            chunk(
+                1,
+                "Capa.",
+                section_path=["front_matter"],
+                metadata={"is_front_matter": True},
+                source_block_ids=["b1"],
+                source_spans=[
+                    {
+                        "block_id": "b1",
+                        "block_start_char": 0,
+                        "block_end_char": 5,
+                        "chunk_start_char": 0,
+                        "chunk_end_char": 5,
+                        "separator_before": None,
+                        "separator_after": None,
+                        "split_index": 0,
+                    }
+                ],
+            )
+        ]
+
+        report = build_report(document, chunks)
+
+        self.assertEqual(report.front_matter_blocks, 1)
+        self.assertEqual(report.front_matter_chunks, 1)
+        self.assertEqual(report.blocks_without_section, 0)
+        self.assertEqual(report.chunks_without_section, 0)
+        self.assertEqual(report.chunks_rebuildable_from_spans, 1)
 
     def test_normalizer_records_base64_removed_for_report_audit(self):
         blocks, _ = normalize_blocks(

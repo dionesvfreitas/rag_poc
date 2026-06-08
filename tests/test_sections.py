@@ -48,22 +48,24 @@ class SectionTests(unittest.TestCase):
 
         self.assertEqual(sectioned[0].section_title, "CLÁUSULA PRIMEIRA DO OBJETO")
 
-    def test_cover_before_first_numbered_section_stays_unsectioned(self):
+    def test_cover_before_first_numbered_section_is_front_matter(self):
         sectioned = sectioned_texts(
             [
                 block("PODER EXECUTIVO", 1, "section_header"),
                 block("SECRETARIA DE ADMINISTRACAO", 2, "section_header"),
-                block("PROCESSO ADMINISTRATIVO 12345/2026", 3, "section_header"),
-                block("1. INTRODUÇÃO", 4, "section_header"),
+                block("EDITAL 123/2026", 3, "section_header"),
+                block("1 DO OBJETO", 4, "section_header"),
                 block("Texto do corpo.", 5),
             ]
         )
 
-        self.assertEqual(sectioned[0].section_path, [])
-        self.assertEqual(sectioned[1].section_path, [])
-        self.assertEqual(sectioned[2].section_path, [])
-        self.assertEqual(sectioned[3].section_path, ["1. INTRODUÇÃO"])
-        self.assertEqual(sectioned[4].section_path, ["1. INTRODUÇÃO"])
+        self.assertEqual(sectioned[0].section_path, ["front_matter"])
+        self.assertEqual(sectioned[1].section_path, ["front_matter"])
+        self.assertEqual(sectioned[2].section_path, ["front_matter"])
+        self.assertEqual(sectioned[0].section_title, "front_matter")
+        self.assertTrue(sectioned[2].metadata["is_front_matter"])
+        self.assertEqual(sectioned[3].section_path, ["1 DO OBJETO"])
+        self.assertEqual(sectioned[4].section_path, ["1 DO OBJETO"])
 
     def test_document_starting_directly_with_numbered_section_starts_body(self):
         sectioned = sectioned_texts(
@@ -119,7 +121,11 @@ class SectionTests(unittest.TestCase):
             ]
         )
 
-        self.assertEqual([item.section_path for item in sectioned[:3]], [[], [], []])
+        self.assertEqual(
+            [item.section_path for item in sectioned[:3]],
+            [["front_matter"], ["front_matter"], ["front_matter"]],
+        )
+        self.assertTrue(all(item.metadata["is_front_matter"] for item in sectioned[:3]))
         self.assertEqual(sectioned[3].section_path, ["CAPÍTULO I DISPOSIÇÕES GERAIS"])
 
     def test_summary_before_body_does_not_start_sections(self):
@@ -133,29 +139,84 @@ class SectionTests(unittest.TestCase):
             ]
         )
 
-        self.assertEqual([item.section_path for item in sectioned[:3]], [[], [], []])
+        self.assertEqual(
+            [item.section_path for item in sectioned[:3]],
+            [["front_matter"], ["front_matter"], ["front_matter"]],
+        )
         self.assertEqual(sectioned[3].section_path, ["1 INTRODUÇÃO"])
         self.assertEqual(sectioned[4].section_path, ["1 INTRODUÇÃO"])
 
-    def test_visual_heading_without_number_can_start_body_with_strong_metadata(self):
+    def test_visual_heading_without_formal_marker_stays_front_matter(self):
         sectioned = sectioned_texts(
             [
                 block(
-                    "DO OBJETO",
+                    "EDITAL",
                     1,
                     "section_header",
                     metadata={
                         "is_bold": True,
                         "font_size": 16,
                         "body_font_size": 11,
+                        "visual_role": "heading",
                     },
                 ),
-                block("Texto da seção.", 2),
+                block(
+                    "MINISTÉRIO DA GESTÃO",
+                    2,
+                    "section_header",
+                    metadata={
+                        "is_bold": True,
+                        "font_size": 16,
+                        "body_font_size": 11,
+                        "visual_role": "heading",
+                    },
+                ),
+                block(
+                    "CONCORRÊNCIA ELETRÔNICA",
+                    3,
+                    "section_header",
+                    metadata={
+                        "is_bold": True,
+                        "font_size": 16,
+                        "body_font_size": 11,
+                        "visual_role": "heading",
+                    },
+                ),
+                block(
+                    "DO OBJETO",
+                    4,
+                    "section_header",
+                    metadata={
+                        "is_bold": True,
+                        "font_size": 16,
+                        "body_font_size": 11,
+                        "visual_role": "heading",
+                    },
+                ),
+                block("1 DO OBJETO", 5, "section_header"),
+                block("Texto da seção.", 6),
             ]
         )
 
-        self.assertEqual(sectioned[0].section_path, ["DO OBJETO"])
-        self.assertEqual(sectioned[1].section_path, ["DO OBJETO"])
+        self.assertEqual(
+            [item.section_path for item in sectioned[:4]],
+            [["front_matter"], ["front_matter"], ["front_matter"], ["front_matter"]],
+        )
+        self.assertTrue(all(item.metadata["is_front_matter"] for item in sectioned[:4]))
+        self.assertEqual(sectioned[4].section_path, ["1 DO OBJETO"])
+        self.assertEqual(sectioned[5].section_path, ["1 DO OBJETO"])
+
+    def test_formal_markers_start_sections_without_visual_evidence(self):
+        examples = [
+            "1 DO OBJETO",
+            "CLÁUSULA PRIMEIRA DO OBJETO",
+            "Art. 1º Esta norma estabelece critérios gerais.",
+        ]
+
+        for index, text in enumerate(examples, start=1):
+            with self.subTest(text=text):
+                sectioned = sectioned_texts([block(text, index)])
+                self.assertEqual(sectioned[0].section_path, [text])
 
     def test_front_matter_and_body_start_helpers_are_document_independent(self):
         cover = block("EDITAL 123/2026", 1, "section_header")

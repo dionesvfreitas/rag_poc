@@ -19,6 +19,15 @@ class ContentType(StrEnum):
     UNKNOWN = "unknown"
 
 
+class AssetType(StrEnum):
+    IMAGE = "image"
+    TABLE = "table"
+    FIGURE = "figure"
+    CHART = "chart"
+    DIAGRAM = "diagram"
+    UNKNOWN = "unknown"
+
+
 @dataclass
 class BoundingBox:
     x0: float | None = None
@@ -32,9 +41,20 @@ class BoundingBox:
 class DocumentAsset:
     asset_id: str
     asset_uri: str
-    asset_type: str
+    asset_type: AssetType | str
     page_no: int | None = None
+    source_block_id: str | None = None
+    bbox: BoundingBox | None = None
+    caption: str | None = None
+    ocr_text: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        if not isinstance(self.asset_type, AssetType):
+            try:
+                self.asset_type = AssetType(self.asset_type)
+            except ValueError:
+                self.asset_type = AssetType.UNKNOWN
 
 
 @dataclass
@@ -100,7 +120,18 @@ class ParserReport:
     figures_detected: int = 0
     figures_saved: int = 0
     figures_linked_to_chunks: int = 0
+    figures_unlinked: int = 0
+    figures_marked_decorative: int = 0
+    asset_links_without_strategy: int = 0
+    asset_links_without_reason: int = 0
+    source_spans_total: int = 0
+    chunks_with_source_spans: int = 0
+    chunks_without_source_spans: int = 0
+    chunks_rebuildable_from_spans: int = 0
+    chunks_not_rebuildable_from_spans: int = 0
     base64_removed: int = 0
+    front_matter_blocks: int = 0
+    front_matter_chunks: int = 0
     chunks_without_section: int = 0
     chunks_split: int = 0
     chunks_mid_sentence: int = 0

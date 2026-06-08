@@ -113,6 +113,12 @@ A CLI gera:
 - `normalized.md`: inspeção humana com `page_no`, `block_id` e `section_path`.
 - `parser_report.json`: métricas de auditoria.
 
+Assets de imagem são salvos localmente hoje e referenciados por `asset_uri`, por exemplo
+`images/page_001_figure_001.png`. O domínio já possui o contrato inicial
+`DocumentAsset`/`AssetType` para a Onda 4, mas a integração completa em
+`ParsedDocument` e storage externo ficam para uma etapa futura. Enquanto isso,
+chunks continuam usando referências leves em `related_assets`.
+
 Campos principais de `Chunk`:
 
 ```json

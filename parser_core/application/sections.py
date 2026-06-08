@@ -2,6 +2,8 @@ import re
 
 
 HEADING_LABELS = {"title", "section_header"}
+FRONT_MATTER_SECTION_PATH = ["front_matter"]
+FRONT_MATTER_SECTION_TITLE = "front_matter"
 CLAUSE_RE = re.compile(
     r"^\s*(?P<number>\d{1,3}(?:\.\d{1,3})*)[.)]?\s+(?P<body>\S.+?)\s*$"
 )
@@ -201,9 +203,7 @@ def is_body_section_start(block):
         return False
     if is_front_matter_like(block):
         return False
-    if has_explicit_body_marker(text):
-        return True
-    return has_visual_heading_evidence(block)
+    return has_explicit_body_marker(text)
 
 
 def heading_score(label, text):
@@ -232,9 +232,7 @@ def heading_score(label, text):
 
 
 def is_structural_heading(label, text):
-    if label in HEADING_LABELS and not clause_number(text):
-        return True
-    return heading_score(label, text) >= 3
+    return has_explicit_body_marker(text)
 
 
 def heading_kind(label, text):
@@ -288,8 +286,9 @@ def apply_sections(blocks):
 
         if not body_started:
             if not is_body_section_start(block):
-                block.section_path = []
-                block.section_title = None
+                block.section_path = list(FRONT_MATTER_SECTION_PATH)
+                block.section_title = FRONT_MATTER_SECTION_TITLE
+                block.metadata["is_front_matter"] = True
                 continue
             body_started = True
             started_on_this_block = True
