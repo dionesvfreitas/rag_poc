@@ -1,7 +1,12 @@
 import argparse
+from typing import Callable
 
+from mini_rag.embeddings import EmbeddingProvider, SentenceTransformersEmbeddingProvider
 from mini_rag.indexing import build_document_index, default_input_path
 from settings import Settings
+
+
+EmbeddingProviderFactory = Callable[[str], EmbeddingProvider]
 
 
 def parse_args(argv=None):
@@ -19,7 +24,11 @@ def parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def main(argv=None):
+def default_embedding_provider_factory(model_name: str) -> EmbeddingProvider:
+    return SentenceTransformersEmbeddingProvider(model_name)
+
+
+def main(argv=None, embedding_provider_factory: EmbeddingProviderFactory | None = None):
     args = parse_args(argv)
     settings = Settings.from_env()
     settings = Settings(
@@ -28,9 +37,11 @@ def main(argv=None):
         similarity_threshold=settings.similarity_threshold,
         index_path=args.output,
     )
+    provider_factory = embedding_provider_factory or default_embedding_provider_factory
     store = build_document_index(
         input_path=args.input,
         output_path=args.output,
+        embedding_provider=provider_factory(args.model),
         settings=settings,
         input_type=args.input_type,
     )
@@ -38,8 +49,8 @@ def main(argv=None):
         f"Wrote {len(store.items)} vectors to {args.output} "
         f"from {store.source_path} using {store.embedding_model}."
     )
+    return 0
 
 
 if __name__ == "__main__":
     main()
-

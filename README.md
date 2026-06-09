@@ -3,12 +3,13 @@
 PoC evoluída para uma base incremental de parsing documental auditável. O foco é:
 
 ```text
-PDF -> Parser -> Blocos -> Seções -> Chunks -> Mini-RAG auditável local
+PDF -> Parser -> Blocos -> Seções -> Chunks -> Mini-RAG auditável local -> Retrieval Evaluation
 ```
 
-Não há Qdrant, Chroma, Elasticsearch, reranker, LLM, chat, API web ou banco
+Não há vector DB externo, BM25, reranker, LLM, chat, API web, frontend ou banco
 de dados externo. A camada Mini-RAG usa embeddings locais com
-`sentence-transformers` e persistência JSON.
+`sentence-transformers`, persistência JSON e avaliação de recuperação também em
+JSON.
 
 ## Arquitetura
 
@@ -40,7 +41,35 @@ A dependência principal segue fixada:
 docling==2.96.0
 ```
 
-## Execução
+## Execução Operacional
+
+### Objetivo do projeto
+
+O projeto combina três peças auditáveis:
+
+- Parser Auditável: converte PDF em blocos, seções, chunks e metadados de proveniência.
+- Mini-RAG Auditável: gera chunks hierárquicos, embeddings e índice local em JSON.
+- Retrieval Evaluation: mede se o `Retriever` encontra os chunks esperados no top-k.
+
+### Fluxo
+
+```text
+PDF
+↓
+Parser
+↓
+Chunks
+↓
+Embeddings
+↓
+Index
+↓
+Retrieval
+↓
+Evaluation
+```
+
+### Como gerar artefatos
 
 Execute o parser:
 
@@ -72,15 +101,61 @@ Depois, gere a camada hierárquica para RAG:
 .venv/bin/python rag_chunker.py
 ```
 
+Os principais artefatos gerados são `parsed_sections.jsonl`,
+`normalized_blocks.jsonl`, `normalized.md`, `parser_report.json` e, após o
+chunker, `rag_chunks.jsonl`.
+
+### Como construir índice
+
 Para construir o índice vetorial local:
 
 ```bash
 .venv/bin/python build_index.py
 ```
 
+Com caminhos explícitos:
+
+```bash
+.venv/bin/python build_index.py --input parsed_sections.jsonl --input-type parsed_sections --output index/document_index.json
+```
+
+Para o smoke reproduzível da avaliação versionada no repositório:
+
+```bash
+.venv/bin/python build_index.py --input tests/fixtures/retrieval_eval/parsed_sections.jsonl --input-type parsed_sections --output index/document_index.json
+```
+
 `build_index.py` usa `rag_chunks.jsonl` quando existir. Caso contrário, lê
 `parsed_sections.jsonl` e reaproveita `rag_chunker.build_hierarchical_chunks`
 em memória, sem recriar chunking.
+
+### Como executar avaliação
+
+Execute a avaliação de recuperação contra um índice local:
+
+```bash
+.venv/bin/python evaluate_retrieval.py --dataset tests/fixtures/retrieval_eval/dataset.json --index index/document_index.json --output reports/retrieval_eval_report.json --top-k 5
+```
+
+O comando grava um report JSON com `schema_version`, metadados de dataset e
+índice, configuração, métricas globais, diagnósticos e casos avaliados.
+
+### Como interpretar métricas
+
+- `top1_hit`: fração de perguntas com pelo menos um chunk esperado na posição 1.
+- `top3_hit`: fração de perguntas com pelo menos um chunk esperado até a posição 3.
+- `top5_hit`: fração de perguntas com pelo menos um chunk esperado até a posição 5.
+- `MRR`: média de `1 / rank` do primeiro chunk relevante; vale `0` quando não há hit.
+- `recall@1`: média da fração de itens esperados recuperados no top 1.
+- `recall@3`: média da fração de itens esperados recuperados até o top 3.
+- `recall@5`: média da fração de itens esperados recuperados até o top 5.
+
+Os diagnósticos `hits_by_section_path` e `hits_by_page` ajudam a localizar
+acertos por seção e página esperadas. Eles não substituem o critério principal:
+a relevância usa `source_chunk_id` quando disponível e `chunk_id` apenas como
+fallback.
+
+### Consulta local
 
 Para consultar sem LLM:
 
@@ -157,6 +232,8 @@ A camada Mini-RAG gera:
 
 - `index/document_index.json`: índice local com `chunk_id`, `content`,
   `embedding` e `metadata` auditável.
+- `reports/retrieval_eval_report.json`: report de avaliação de recuperação
+  quando `evaluate_retrieval.py` é executado.
 
 Assets de imagem são salvos localmente hoje e referenciados por `asset_uri`, por exemplo
 `images/page_001_figure_001.png`. O domínio já possui o contrato inicial
@@ -196,16 +273,16 @@ Tabelas são preservadas como chunks próprios quando `PRESERVE_TABLES_AS_CHUNKS
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-A suíte cobre modelos, IDs, registry, normalização, reconstrução de seções, chunk builder, exporters, pipeline, golden schema e `rag_chunker.py`.
-Também cobre embeddings injetáveis, persistência do índice local, busca por
-similaridade, retriever, citações e explainability do Mini-RAG.
+A suíte cobre modelos, IDs, registry, normalização, reconstrução de seções,
+chunk builder, exporters, pipeline, golden schema e `rag_chunker.py`. Também
+cobre embeddings injetáveis, persistência do índice local, busca por
+similaridade, retriever, citações, explainability do Mini-RAG, avaliação de
+recuperação, report JSON e o fluxo E2E `build_index.py` -> `evaluate_retrieval.py`.
 
 ## Limitações e Próximos Passos
 
 - O índice é JSON local e busca por cosine similarity em memória; é adequado
   para validação ponta-a-ponta, não para grande escala.
 - Não há resposta generativa: `query.py` retorna apenas os chunks relevantes.
-- Próximos passos naturais:
-  - Qdrant: substituir `LocalVectorStore` por uma implementação atrás da mesma interface.
-  - Reranker: adicionar etapa posterior ao `Retriever`.
-  - LLM: gerar resposta usando os chunks recuperados e as citações já preservadas.
+- A recuperação atual é sem BM25, sem reranker, sem vector DB externo, sem LLM,
+  sem API e sem frontend.
