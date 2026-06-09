@@ -1,4 +1,4 @@
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -55,6 +55,21 @@ class DocumentAsset:
                 self.asset_type = AssetType(self.asset_type)
             except ValueError:
                 self.asset_type = AssetType.UNKNOWN
+        if isinstance(self.bbox, dict):
+            allowed = {"x0", "y0", "x1", "y1", "coord_origin"}
+            self.bbox = BoundingBox(**{key: self.bbox.get(key) for key in allowed})
+        self.metadata = plain_metadata_dict(self.metadata)
+
+    def to_related_asset(self):
+        reference = {
+            "asset_id": self.asset_id,
+            "asset_type": self.asset_type.value,
+            "asset_uri": self.asset_uri,
+            "page_no": self.page_no,
+        }
+        if self.source_block_id:
+            reference["source_block_id"] = self.source_block_id
+        return reference
 
 
 @dataclass
@@ -81,6 +96,7 @@ class ParsedDocument:
     source_name: str
     page_total: int
     blocks: list[ParsedBlock] = field(default_factory=list)
+    assets: list[DocumentAsset] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -117,11 +133,21 @@ class ParserReport:
     avg_block_chars: float
     avg_chunk_chars: float
     max_chunk_chars: int
+    assets_detected_total: int = 0
+    assets_saved_total: int = 0
+    assets_by_type: dict[str, int] = field(default_factory=dict)
+    assets_linked_total: int = 0
+    assets_unlinked_total: int = 0
+    assets_decorative_total: int = 0
     figures_detected: int = 0
     figures_saved: int = 0
     figures_linked_to_chunks: int = 0
     figures_unlinked: int = 0
     figures_marked_decorative: int = 0
+    tables_detected: int = 0
+    charts_detected: int = 0
+    diagrams_detected: int = 0
+    unknown_assets_detected: int = 0
     asset_links_without_strategy: int = 0
     asset_links_without_reason: int = 0
     source_spans_total: int = 0
@@ -145,5 +171,28 @@ def to_dict(value: Any) -> Any:
     if isinstance(value, StrEnum):
         return value.value
     if hasattr(value, "__dataclass_fields__"):
-        return asdict(value)
+        return plain_metadata_value(asdict(value))
     return value
+
+
+def plain_metadata_dict(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    return {
+        str(key): plain_metadata_value(value)
+        for key, value in dict(metadata or {}).items()
+    }
+
+
+def plain_metadata_value(value: Any) -> Any:
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, StrEnum):
+        return value.value
+    if is_dataclass(value):
+        return plain_metadata_value(asdict(value))
+    if isinstance(value, dict):
+        return {str(key): plain_metadata_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [plain_metadata_value(item) for item in value]
+    return str(value)

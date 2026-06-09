@@ -5,7 +5,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from parser_core.domain.ids import block_id, chunk_id, document_id_for_path
-from parser_core.domain.models import AssetType, Chunk, DocumentAsset, ContentType, ParsedBlock
+from parser_core.domain.models import AssetType, BoundingBox, Chunk, DocumentAsset, ContentType, ParsedBlock, ParsedDocument, to_dict
 
 
 class DomainModelTests(unittest.TestCase):
@@ -34,6 +34,59 @@ class DomainModelTests(unittest.TestCase):
         self.assertEqual(json.loads(json.dumps(data))["asset_type"], "image")
         self.assertEqual(data["source_block_id"], "b1")
         self.assertEqual(data["caption"], "Figura 1 - Fluxo.")
+
+    def test_document_asset_supports_canonical_asset_types(self):
+        for asset_type in ["image", "figure", "table", "chart", "diagram", "unknown"]:
+            asset = DocumentAsset(
+                asset_id=f"{asset_type}_001",
+                asset_uri=f"assets/{asset_type}_001",
+                asset_type=asset_type,
+            )
+
+            self.assertEqual(asset.asset_type.value, asset_type)
+
+    def test_document_asset_normalizes_unknown_types_bbox_and_metadata(self):
+        class ExternalObject:
+            def __str__(self):
+                return "external-object"
+
+        asset = DocumentAsset(
+            asset_id="asset_001",
+            asset_uri="assets/asset_001.bin",
+            asset_type="docling-special",
+            source_block_id="b1",
+            page_no=2,
+            bbox={"x0": 1, "y0": 2, "x1": 3, "y1": 4, "coord_origin": "BOTTOMLEFT"},
+            caption="Asset caption",
+            ocr_text="OCR text",
+            metadata={"external": ExternalObject(), "path": Path("asset.bin")},
+        )
+        data = to_dict(asset)
+
+        self.assertEqual(asset.asset_type, AssetType.UNKNOWN)
+        self.assertIsInstance(asset.bbox, BoundingBox)
+        self.assertEqual(data["bbox"]["x0"], 1)
+        self.assertEqual(data["metadata"]["external"], "external-object")
+        self.assertEqual(data["metadata"]["path"], "asset.bin")
+
+    def test_parsed_document_preserves_canonical_assets(self):
+        asset = DocumentAsset(
+            asset_id="fig_001",
+            asset_uri="images/page_001_figure_001.png",
+            asset_type=AssetType.IMAGE,
+            source_block_id="b1",
+            page_no=1,
+        )
+        document = ParsedDocument(
+            document_id="doc",
+            source_path="doc.pdf",
+            source_name="doc.pdf",
+            page_total=1,
+            assets=[asset],
+        )
+
+        self.assertEqual(document.assets[0].asset_id, "fig_001")
+        self.assertEqual(to_dict(document)["assets"][0]["asset_type"], "image")
 
     def test_ids_are_sha256_and_deterministic(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -71,10 +124,15 @@ class DomainModelTests(unittest.TestCase):
         self.assertEqual(chunk.source_block_ids, ["b"])
 
     def test_related_assets_remain_lightweight_references(self):
+        asset = DocumentAsset(
+            asset_id="fig_001",
+            asset_uri="images/page_001_figure_001.png",
+            asset_type="image",
+            source_block_id="b1",
+            page_no=1,
+        )
         related_asset = {
-            "asset_id": "fig_001",
-            "asset_uri": "images/page_001_figure_001.png",
-            "asset_type": "image",
+            **asset.to_related_asset(),
             "link_strategy": "caption_detected",
             "link_reason": "figure has caption immediately after image",
         }
@@ -90,6 +148,7 @@ class DomainModelTests(unittest.TestCase):
 
         self.assertEqual(chunk.related_assets[0]["asset_id"], "fig_001")
         self.assertIsInstance(chunk.related_assets[0], dict)
+        self.assertNotIsInstance(chunk.related_assets[0], DocumentAsset)
 
 
 if __name__ == "__main__":

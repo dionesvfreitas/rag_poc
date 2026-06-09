@@ -3,7 +3,7 @@ import unittest
 from parser_core.application.normalizer import normalize_blocks
 from parser_core.application.pipeline import ParserPipelineConfig
 from parser_core.application.reports import build_report
-from parser_core.domain.models import Chunk, ContentType, ParsedBlock, ParsedDocument
+from parser_core.domain.models import Chunk, ContentType, DocumentAsset, ParsedBlock, ParsedDocument
 
 
 def block(
@@ -205,6 +205,91 @@ class ReportTests(unittest.TestCase):
         self.assertTrue(any("marked decorative" in item for item in report.warnings))
         self.assertTrue(any("chunk(s) without section_path" in item for item in report.warnings))
         self.assertTrue(any("hard character split" in item for item in report.warnings))
+
+    def test_report_separates_asset_metrics_by_type(self):
+        image_asset = DocumentAsset(
+            asset_id="fig_001",
+            asset_uri="images/page_001_figure_001.png",
+            asset_type="image",
+            page_no=1,
+            source_block_id="b1",
+        )
+        table_asset = DocumentAsset(
+            asset_id="tbl_001",
+            asset_uri="tables/page_001_table_001.json",
+            asset_type="table",
+            page_no=1,
+            source_block_id="b2",
+        )
+        unknown_asset = DocumentAsset(
+            asset_id="asset_001",
+            asset_uri="assets/page_001_asset_001.bin",
+            asset_type="vendor-specific",
+            page_no=1,
+            source_block_id="b3",
+        )
+        linked_image = {
+            **image_asset.to_related_asset(),
+            "link_strategy": "same_page_nearest_text",
+            "link_reason": "figure shares same page and section with nearest text block",
+        }
+        document = ParsedDocument(
+            document_id="doc",
+            source_path="doc.pdf",
+            source_name="doc.pdf",
+            page_total=1,
+            assets=[image_asset, table_asset, unknown_asset],
+            blocks=[
+                block(
+                    "b1",
+                    "",
+                    content_type=ContentType.FIGURE.value,
+                    section_path=["1 DO OBJETO"],
+                    metadata={"asset_id": "fig_001", "asset_uri": image_asset.asset_uri, "asset_type": "image"},
+                ),
+                block(
+                    "b2",
+                    "",
+                    content_type=ContentType.TABLE.value,
+                    section_path=["1 DO OBJETO"],
+                    metadata={"asset_id": "tbl_001", "asset_uri": table_asset.asset_uri, "asset_type": "table"},
+                ),
+                block(
+                    "b3",
+                    "",
+                    content_type=ContentType.UNKNOWN.value,
+                    section_path=["1 DO OBJETO"],
+                    metadata={"asset_id": "asset_001", "asset_uri": unknown_asset.asset_uri, "asset_type": "vendor-specific"},
+                ),
+            ],
+        )
+        chunks = [
+            chunk(
+                1,
+                "Texto vinculado.",
+                section_path=["1 DO OBJETO"],
+                related_assets=[linked_image],
+            )
+        ]
+
+        report = build_report(document, chunks)
+
+        self.assertEqual(report.assets_detected_total, 3)
+        self.assertEqual(report.assets_saved_total, 3)
+        self.assertEqual(report.assets_by_type, {"image": 1, "table": 1, "unknown": 1})
+        self.assertEqual(report.assets_linked_total, 1)
+        self.assertEqual(report.assets_unlinked_total, 2)
+        self.assertEqual(report.assets_decorative_total, 0)
+        self.assertEqual(report.figures_detected, 1)
+        self.assertEqual(report.figures_saved, 1)
+        self.assertEqual(report.figures_linked_to_chunks, 1)
+        self.assertEqual(report.figures_unlinked, 0)
+        self.assertEqual(report.tables_detected, 1)
+        self.assertEqual(report.charts_detected, 0)
+        self.assertEqual(report.diagrams_detected, 0)
+        self.assertEqual(report.unknown_assets_detected, 1)
+        self.assertTrue(hasattr(report, "figures_saved"))
+        self.assertTrue(any("unknown asset_type" in item for item in report.warnings))
 
     def test_report_warns_about_chunk_without_source_spans(self):
         document = ParsedDocument(

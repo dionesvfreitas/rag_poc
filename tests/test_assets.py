@@ -6,7 +6,7 @@ from parser_core.application.assets import document_asset_from_figure_block
 from parser_core.application.chunk_builder import ChunkBuilderConfig, build_chunks
 from parser_core.application.normalizer import normalize_blocks
 from parser_core.application.pipeline import ParserPipelineConfig
-from parser_core.domain.models import BoundingBox, ContentType, ParsedBlock
+from parser_core.domain.models import BoundingBox, ContentType, DocumentAsset, ParsedBlock
 from parser_core.infrastructure.asset_store import LocalAssetStore
 from parser_core.infrastructure.docling_adapter import docling_document_to_parsed_document
 
@@ -130,9 +130,19 @@ class AssetTests(unittest.TestCase):
             self.assertEqual(figure.text, "")
             self.assertNotIn("data:image", figure.text)
             self.assertTrue((Path(tmp) / "images" / "page_001_figure_001.png").exists())
+            self.assertEqual(len(document.assets), 1)
+            self.assertIsInstance(document.assets[0], DocumentAsset)
+            self.assertEqual(document.assets[0].asset_id, "fig_001")
+            self.assertEqual(document.assets[0].source_block_id, figure.block_id)
+            self.assertEqual(document.assets[0].page_no, 1)
             self.assertEqual(document.metadata["assets"][0]["asset_id"], "fig_001")
+            self.assertIsInstance(document.metadata["assets"][0], dict)
 
     def test_figure_metadata_can_be_prepared_as_document_asset(self):
+        class DoclingLikeObject:
+            def __str__(self):
+                return "docling-like-object"
+
         figure = block(
             "",
             label="picture",
@@ -151,7 +161,7 @@ class AssetTests(unittest.TestCase):
                     "asset_uri": "images/page_003_figure_001.png",
                     "asset_type": "image",
                     "page_no": 3,
-                    "metadata": {"storage_backend": "local"},
+                    "metadata": {"storage_backend": "local", "native": DoclingLikeObject()},
                 },
             },
         )
@@ -167,6 +177,7 @@ class AssetTests(unittest.TestCase):
         self.assertEqual(asset.caption, "Figura 1 - Fluxo.")
         self.assertIsNone(asset.ocr_text)
         self.assertEqual(asset.metadata["storage_backend"], "local")
+        self.assertEqual(asset.metadata["native"], "docling-like-object")
 
     def test_chunks_reference_related_assets_without_embedding_figure_text(self):
         figure_asset = asset("fig_001")

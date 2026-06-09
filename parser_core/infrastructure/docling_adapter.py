@@ -3,9 +3,10 @@ import json
 import os
 from pathlib import Path
 
+from parser_core.application.assets import document_asset_from_figure_block
 from parser_core.application.normalizer import normalize_plain_text
 from parser_core.domain.ids import block_id, document_id_for_path
-from parser_core.domain.models import BoundingBox, ParsedBlock, ParsedDocument
+from parser_core.domain.models import BoundingBox, ParsedBlock, ParsedDocument, to_dict
 from parser_core.infrastructure.asset_store import LocalAssetStore, asset_record, decode_data_uri
 
 
@@ -459,12 +460,14 @@ def document_assets(blocks):
     assets = []
     seen = set()
     for block in blocks:
-        for asset in block.metadata.get("related_assets", []):
-            asset_id = asset.get("asset_id")
-            if asset_id in seen:
-                continue
-            seen.add(asset_id)
-            assets.append(asset)
+        asset = document_asset_from_figure_block(block)
+        if asset is None:
+            continue
+        key = asset.asset_id or asset.asset_uri
+        if key in seen:
+            continue
+        seen.add(key)
+        assets.append(asset)
     return assets
 
 
@@ -506,17 +509,19 @@ def docling_document_to_parsed_document(document, source_path, asset_store=None)
         extraction_strategy = "none"
         warnings.append("Docling adapter produced no blocks after native, dict/json, and markdown extraction.")
 
+    assets = document_assets(blocks)
     return ParsedDocument(
         document_id=document_id,
         source_path=str(source),
         source_name=source.name,
         page_total=page_total,
         blocks=blocks,
+        assets=assets,
         metadata={
             "parser_name": "docling",
             "docling_version": installed_docling_version(),
             "extraction_strategy": extraction_strategy,
-            "assets": document_assets(blocks),
+            "assets": [to_dict(asset) for asset in assets],
             "warnings": warnings,
         },
     )

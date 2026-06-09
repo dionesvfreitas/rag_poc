@@ -1,10 +1,10 @@
 import base64
 import re
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 from parser_core.domain.models import DocumentAsset
+from parser_core.domain.models import to_dict
 
 
 DATA_URI_RE = re.compile(
@@ -36,7 +36,7 @@ def decode_data_uri(value):
 
 
 def asset_record(asset):
-    return asdict(asset) if hasattr(asset, "__dataclass_fields__") else dict(asset)
+    return to_dict(asset) if hasattr(asset, "__dataclass_fields__") else dict(asset)
 
 
 class LocalAssetStore:

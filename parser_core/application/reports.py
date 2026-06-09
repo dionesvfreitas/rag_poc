@@ -1,17 +1,43 @@
 import re
 
 from parser_core.application.normalizer import content_type_counts
-from parser_core.domain.models import ContentType, ParserReport
+from parser_core.domain.models import AssetType, ContentType, ParserReport
 
 
 BASE64_AUDIT_RE = re.compile(r"data:image|base64", re.I)
 FRONT_MATTER_SECTION_PATH = ["front_matter"]
+FIGURE_ASSET_TYPES = {AssetType.FIGURE.value, AssetType.IMAGE.value}
+KNOWN_ASSET_TYPES = {asset_type.value for asset_type in AssetType}
 
 
 def asset_key(asset):
-    if not isinstance(asset, dict):
-        return None
-    return asset.get("asset_id") or asset.get("asset_uri")
+    if isinstance(asset, dict):
+        return asset.get("asset_id") or asset.get("asset_uri")
+    return getattr(asset, "asset_id", None) or getattr(asset, "asset_uri", None)
+
+
+def asset_type_value(asset, default=AssetType.UNKNOWN.value):
+    if isinstance(asset, dict):
+        value = asset.get("asset_type") or asset.get("type")
+    else:
+        value = getattr(asset, "asset_type", None)
+    if hasattr(value, "value"):
+        value = value.value
+    normalized = str(value or default).strip().lower()
+    return normalized if normalized in KNOWN_ASSET_TYPES else AssetType.UNKNOWN.value
+
+
+def merge_asset_type(existing_type, new_type):
+    if existing_type == AssetType.UNKNOWN.value and new_type != AssetType.UNKNOWN.value:
+        return new_type
+    return existing_type
+
+
+def add_asset(inventory, key, asset_type):
+    if not key:
+        return
+    asset_type = asset_type if asset_type in KNOWN_ASSET_TYPES else AssetType.UNKNOWN.value
+    inventory[key] = merge_asset_type(inventory.get(key, asset_type), asset_type)
 
 
 def block_asset_keys(block):
@@ -27,12 +53,49 @@ def block_asset_keys(block):
 
 
 def document_asset_keys(parsed_document):
-    keys = set()
-    for asset in (parsed_document.metadata or {}).get("assets", []):
-        key = asset_key(asset)
-        if key:
-            keys.add(key)
-    return keys
+    return set(document_asset_inventory(parsed_document))
+
+
+def document_asset_inventory(parsed_document):
+    inventory = {}
+    assets = list(getattr(parsed_document, "assets", []) or [])
+    assets.extend((parsed_document.metadata or {}).get("assets", []))
+    for asset in assets:
+        add_asset(inventory, asset_key(asset), asset_type_value(asset))
+    return inventory
+
+
+def block_asset_records(block):
+    metadata = block.metadata or {}
+    records = []
+    if isinstance(metadata.get("asset"), dict):
+        records.append(metadata["asset"])
+    if metadata.get("asset_id") or metadata.get("asset_uri"):
+        records.append(metadata)
+    records.extend(metadata.get("related_assets", []) or [])
+    return records
+
+
+def detected_asset_inventory(blocks, saved_assets):
+    inventory = dict(saved_assets)
+    for block in blocks:
+        block_records = block_asset_records(block)
+        for asset in block_records:
+            add_asset(inventory, asset_key(asset), asset_type_value(asset))
+        if block.content_type == ContentType.FIGURE.value and not block_records:
+            add_asset(inventory, f"block:{block.block_id}", AssetType.FIGURE.value)
+    return inventory
+
+
+def asset_type_counts(inventory):
+    counts = {asset_type.value: 0 for asset_type in AssetType}
+    for asset_type in inventory.values():
+        counts[asset_type if asset_type in KNOWN_ASSET_TYPES else AssetType.UNKNOWN.value] += 1
+    return {asset_type: count for asset_type, count in sorted(counts.items()) if count}
+
+
+def count_asset_types(inventory, asset_types):
+    return sum(1 for asset_type in inventory.values() if asset_type in asset_types)
 
 
 def chunk_asset_keys(chunks):
@@ -45,6 +108,16 @@ def chunk_asset_keys(chunks):
             if key:
                 keys.add(key)
     return keys
+
+
+def chunk_asset_inventory(chunks):
+    inventory = {}
+    for chunk in chunks:
+        for asset in chunk.related_assets:
+            if not is_effective_asset_link(asset):
+                continue
+            add_asset(inventory, asset_key(asset), asset_type_value(asset))
+    return inventory
 
 
 def related_assets_from_records(records):
@@ -78,6 +151,16 @@ def audited_block_asset_keys(blocks, strategy):
             if key:
                 keys.add(key)
     return keys
+
+
+def audited_block_asset_inventory(blocks, strategy):
+    inventory = {}
+    for block in blocks:
+        for asset in (block.metadata or {}).get("related_assets", []):
+            if asset.get("link_strategy") != strategy:
+                continue
+            add_asset(inventory, asset_key(asset), asset_type_value(asset))
+    return inventory
 
 
 def base64_removed_count(blocks):
@@ -149,6 +232,7 @@ def audit_warnings(
     figures_unlinked,
     figures_marked_decorative,
     figure_blocks_without_assets,
+    unknown_assets_detected,
     base64_removed,
     base64_residual_blocks,
     base64_residual_chunks,
@@ -179,6 +263,8 @@ def audit_warnings(
         add_warning(warnings, f"{figures_unlinked} figure asset(s) could not be safely linked.")
     if figures_marked_decorative:
         add_warning(warnings, f"{figures_marked_decorative} figure asset(s) marked decorative.")
+    if unknown_assets_detected:
+        add_warning(warnings, f"{unknown_assets_detected} asset(s) with unknown asset_type.")
     if chunks_without_section:
         add_warning(warnings, f"{chunks_without_section} chunk(s) without section_path.")
     if chunks_without_source_spans:
@@ -210,11 +296,34 @@ def build_report(parsed_document, chunks, warnings=None, parser_name="docling"):
     blocks = parsed_document.blocks
     figure_blocks = [block for block in blocks if block.content_type == ContentType.FIGURE.value]
     blocks_by_id = {block.block_id: block for block in blocks}
-    saved_asset_keys = document_asset_keys(parsed_document)
-    linked_asset_keys = chunk_asset_keys(chunks)
-    decorative_asset_keys = audited_block_asset_keys(blocks, "not_linked_decorative")
-    explicitly_unlinked_asset_keys = audited_block_asset_keys(blocks, "not_linked")
-    figures_unlinked = len(explicitly_unlinked_asset_keys | (saved_asset_keys - linked_asset_keys - decorative_asset_keys))
+    saved_assets = document_asset_inventory(parsed_document)
+    detected_assets = detected_asset_inventory(blocks, saved_assets)
+    linked_assets = chunk_asset_inventory(chunks)
+    decorative_assets = audited_block_asset_inventory(blocks, "not_linked_decorative")
+    explicitly_unlinked_assets = audited_block_asset_inventory(blocks, "not_linked")
+    saved_asset_keys = set(saved_assets)
+    linked_asset_keys = set(linked_assets)
+    decorative_asset_keys = set(decorative_assets)
+    explicitly_unlinked_asset_keys = set(explicitly_unlinked_assets)
+    unlinked_asset_keys = explicitly_unlinked_asset_keys | (
+        saved_asset_keys - linked_asset_keys - decorative_asset_keys
+    )
+    assets_by_type = asset_type_counts(detected_assets)
+    figures_detected = count_asset_types(detected_assets, FIGURE_ASSET_TYPES)
+    figures_saved = count_asset_types(saved_assets, FIGURE_ASSET_TYPES)
+    figures_linked_to_chunks = count_asset_types(linked_assets, FIGURE_ASSET_TYPES)
+    figures_marked_decorative = count_asset_types(decorative_assets, FIGURE_ASSET_TYPES)
+    figures_unlinked = sum(
+        1
+        for key in unlinked_asset_keys
+        if (
+            explicitly_unlinked_assets.get(key)
+            or saved_assets.get(key)
+            or detected_assets.get(key)
+            or AssetType.UNKNOWN.value
+        )
+        in FIGURE_ASSET_TYPES
+    )
     pages_with_text = {block.page_no for block in blocks if block.page_no is not None and block.text}
     all_pages = set(range(1, parsed_document.page_total + 1))
     block_lengths = [len(block.text) for block in blocks]
@@ -250,11 +359,12 @@ def build_report(parsed_document, chunks, warnings=None, parser_name="docling"):
         blocks_without_section=blocks_without_section,
         chunks_without_section=chunks_without_section,
         figures_detected=len(figure_blocks),
-        figures_saved=len(saved_asset_keys),
-        figures_linked_to_chunks=len(linked_asset_keys),
+        figures_saved=figures_saved,
+        figures_linked_to_chunks=figures_linked_to_chunks,
         figures_unlinked=figures_unlinked,
-        figures_marked_decorative=len(decorative_asset_keys),
+        figures_marked_decorative=figures_marked_decorative,
         figure_blocks_without_assets=sum(1 for block in figure_blocks if not block_asset_keys(block)),
+        unknown_assets_detected=assets_by_type.get(AssetType.UNKNOWN.value, 0),
         base64_removed=base64_removed,
         base64_residual_blocks=sum(1 for block in blocks if has_base64_residue(block)),
         base64_residual_chunks=sum(1 for chunk in chunks if has_base64_residue(chunk)),
@@ -281,11 +391,21 @@ def build_report(parsed_document, chunks, warnings=None, parser_name="docling"):
         avg_block_chars=sum(block_lengths) / len(block_lengths) if block_lengths else 0.0,
         avg_chunk_chars=sum(chunk_lengths) / len(chunk_lengths) if chunk_lengths else 0.0,
         max_chunk_chars=max(chunk_lengths) if chunk_lengths else 0,
-        figures_detected=len(figure_blocks),
-        figures_saved=len(saved_asset_keys),
-        figures_linked_to_chunks=len(linked_asset_keys),
+        assets_detected_total=len(detected_assets),
+        assets_saved_total=len(saved_assets),
+        assets_by_type=assets_by_type,
+        assets_linked_total=len(linked_assets),
+        assets_unlinked_total=len(unlinked_asset_keys),
+        assets_decorative_total=len(decorative_assets),
+        figures_detected=figures_detected,
+        figures_saved=figures_saved,
+        figures_linked_to_chunks=figures_linked_to_chunks,
         figures_unlinked=figures_unlinked,
-        figures_marked_decorative=len(decorative_asset_keys),
+        figures_marked_decorative=figures_marked_decorative,
+        tables_detected=assets_by_type.get(AssetType.TABLE.value, 0),
+        charts_detected=assets_by_type.get(AssetType.CHART.value, 0),
+        diagrams_detected=assets_by_type.get(AssetType.DIAGRAM.value, 0),
+        unknown_assets_detected=assets_by_type.get(AssetType.UNKNOWN.value, 0),
         asset_links_without_strategy=asset_links_without_strategy,
         asset_links_without_reason=asset_links_without_reason,
         source_spans_total=source_spans_total,
