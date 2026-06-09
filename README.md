@@ -3,10 +3,12 @@
 PoC evoluída para uma base incremental de parsing documental auditável. O foco é:
 
 ```text
-PDF -> Parser -> Blocos -> Seções -> Chunks -> Artefatos auditáveis
+PDF -> Parser -> Blocos -> Seções -> Chunks -> Mini-RAG auditável local
 ```
 
-Não há vector DB, embeddings, reranker, LLM, chat, API web ou banco de dados.
+Não há Qdrant, Chroma, Elasticsearch, reranker, LLM, chat, API web ou banco
+de dados externo. A camada Mini-RAG usa embeddings locais com
+`sentence-transformers` e persistência JSON.
 
 ## Arquitetura
 
@@ -46,7 +48,14 @@ Execute o parser:
 .venv/bin/python parse_pdf.py
 ```
 
-Por padrão, a CLI usa o primeiro `*.pdf` no diretório atual. Caminhos e saídas podem ser configurados:
+Por padrão, a CLI usa o primeiro `*.pdf` no diretório atual. Também é possível
+passar o PDF como argumento:
+
+```bash
+.venv/bin/python parse_pdf.py documento.pdf
+```
+
+Caminhos e saídas podem ser configurados:
 
 ```bash
 INPUT_PDF=documento.pdf \
@@ -62,6 +71,25 @@ Depois, gere a camada hierárquica para RAG:
 ```bash
 .venv/bin/python rag_chunker.py
 ```
+
+Para construir o índice vetorial local:
+
+```bash
+.venv/bin/python build_index.py
+```
+
+`build_index.py` usa `rag_chunks.jsonl` quando existir. Caso contrário, lê
+`parsed_sections.jsonl` e reaproveita `rag_chunker.build_hierarchical_chunks`
+em memória, sem recriar chunking.
+
+Para consultar sem LLM:
+
+```bash
+.venv/bin/python query.py --query "Qual o objeto do edital?"
+```
+
+A saída mostra `score`, `chunk_id`, `source_chunk_id`, página, seção,
+`source_block_ids` e trecho do chunk recuperado.
 
 Exemplo completo usando o PDF local do repositório e saídas temporárias:
 
@@ -102,6 +130,18 @@ MERGE_SMALL_CHUNKS=true
 PRESERVE_TABLES_AS_CHUNKS=true
 ```
 
+Mini-RAG:
+
+```bash
+EMBEDDING_MODEL=BAAI/bge-m3
+TOP_K=10
+SIMILARITY_THRESHOLD=0.0
+INDEX_PATH=index/document_index.json
+```
+
+O primeiro uso do modelo pode baixar/cachear pesos localmente via
+`sentence-transformers`.
+
 Headers e footers repetidos são marcados por padrão em `metadata`; não são removidos automaticamente.
 
 ## Artefatos
@@ -112,6 +152,11 @@ A CLI gera:
 - `parsed_sections.jsonl`: chunks finais, com campos novos e campos legados de compatibilidade.
 - `normalized.md`: inspeção humana com `page_no`, `block_id` e `section_path`.
 - `parser_report.json`: métricas de auditoria.
+
+A camada Mini-RAG gera:
+
+- `index/document_index.json`: índice local com `chunk_id`, `content`,
+  `embedding` e `metadata` auditável.
 
 Assets de imagem são salvos localmente hoje e referenciados por `asset_uri`, por exemplo
 `images/page_001_figure_001.png`. O domínio já possui o contrato inicial
@@ -152,3 +197,15 @@ Tabelas são preservadas como chunks próprios quando `PRESERVE_TABLES_AS_CHUNKS
 ```
 
 A suíte cobre modelos, IDs, registry, normalização, reconstrução de seções, chunk builder, exporters, pipeline, golden schema e `rag_chunker.py`.
+Também cobre embeddings injetáveis, persistência do índice local, busca por
+similaridade, retriever, citações e explainability do Mini-RAG.
+
+## Limitações e Próximos Passos
+
+- O índice é JSON local e busca por cosine similarity em memória; é adequado
+  para validação ponta-a-ponta, não para grande escala.
+- Não há resposta generativa: `query.py` retorna apenas os chunks relevantes.
+- Próximos passos naturais:
+  - Qdrant: substituir `LocalVectorStore` por uma implementação atrás da mesma interface.
+  - Reranker: adicionar etapa posterior ao `Retriever`.
+  - LLM: gerar resposta usando os chunks recuperados e as citações já preservadas.

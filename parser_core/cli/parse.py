@@ -1,4 +1,5 @@
 import os
+import sys
 from dataclasses import asdict
 from pathlib import Path
 
@@ -15,7 +16,10 @@ def env_bool(name, default):
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def default_input_pdf():
+def default_input_pdf(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and not argv[0].startswith("-"):
+        return argv[0]
     configured = os.getenv("INPUT_PDF")
     if configured:
         return configured
@@ -52,8 +56,8 @@ def legacy_chunk_record(chunk):
     return data
 
 
-def main():
-    input_path = Path(default_input_pdf())
+def main(argv=None):
+    input_path = Path(default_input_pdf(argv))
     if not input_path.exists():
         raise FileNotFoundError(f"Input PDF not found: {input_path}")
 
