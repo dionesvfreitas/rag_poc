@@ -15,6 +15,8 @@ class MiniRagCitationTests(unittest.TestCase):
                     "page_end": 4,
                     "section_path": ["1", "1.1"],
                     "source_block_ids": ["b1", "b2"],
+                    "source_spans": [{"block_id": "b1"}],
+                    "related_assets": [{"asset_id": "a1"}],
                 },
             }
         ]
@@ -32,6 +34,8 @@ class MiniRagCitationTests(unittest.TestCase):
                     "page_end": 4,
                     "section_path": ["1", "1.1"],
                     "source_block_ids": ["b1", "b2"],
+                    "source_spans": [{"block_id": "b1"}],
+                    "related_assets": [{"asset_id": "a1"}],
                     "score": 0.93,
                 }
             ],
@@ -40,4 +44,3 @@ class MiniRagCitationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

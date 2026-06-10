@@ -3,17 +3,23 @@ class CitationBuilder:
         citations = []
         for result in search_results:
             metadata = result.get("metadata") or {}
-            page_start = metadata.get("page_start")
-            page_end = metadata.get("page_end")
+            page_start = value_from_result(result, metadata, "page_start")
+            page_end = value_from_result(result, metadata, "page_end")
             citations.append(
                 {
-                    "chunk_id": result.get("chunk", {}).get("chunk_id"),
-                    "source_chunk_id": metadata.get("source_chunk_id"),
+                    "chunk_id": chunk_id_from_result(result),
+                    "source_chunk_id": value_from_result(result, metadata, "source_chunk_id"),
                     "pages": pages_from_range(page_start, page_end),
                     "page_start": page_start,
                     "page_end": page_end,
-                    "section_path": list(metadata.get("section_path") or []),
-                    "source_block_ids": list(metadata.get("source_block_ids") or []),
+                    "section_path": list(value_from_result(result, metadata, "section_path") or []),
+                    "source_block_ids": list(
+                        value_from_result(result, metadata, "source_block_ids") or []
+                    ),
+                    "source_spans": list(value_from_result(result, metadata, "source_spans") or []),
+                    "related_assets": list(
+                        value_from_result(result, metadata, "related_assets") or []
+                    ),
                     "score": result.get("score"),
                 }
             )
@@ -31,3 +37,15 @@ def pages_from_range(page_start, page_end):
         return [page_start]
     return list(range(page_start, page_end + 1))
 
+
+def chunk_id_from_result(result):
+    chunk_id = result.get("chunk_id")
+    if chunk_id is not None:
+        return chunk_id
+    return result.get("chunk", {}).get("chunk_id")
+
+
+def value_from_result(result, metadata, field):
+    if field in metadata:
+        return metadata.get(field)
+    return result.get(field)
