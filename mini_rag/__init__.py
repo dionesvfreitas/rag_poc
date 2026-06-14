@@ -7,11 +7,14 @@ from mini_rag.answering import (
     LLMProvider,
     OllamaLLMProvider,
 )
+from mini_rag.groundedness import GroundednessValidator, validate_groundedness
 
 __all__ = [
     "AnswerGenerator",
     "FakeLLMProvider",
+    "GroundednessValidator",
     "INSUFFICIENT_EVIDENCE_MESSAGE",
     "LLMProvider",
     "OllamaLLMProvider",
+    "validate_groundedness",
 ]
